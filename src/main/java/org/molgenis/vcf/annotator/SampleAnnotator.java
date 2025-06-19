@@ -6,10 +6,7 @@ import htsjdk.variant.variantcontext.writer.VariantContextWriterBuilder;
 import htsjdk.variant.vcf.*;
 import org.molgenis.vcf.annotator.model.Settings;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public class SampleAnnotator {
     public static void annotate(Settings settings){
@@ -22,7 +19,12 @@ public class SampleAnnotator {
                 .setOutputFile(settings.getOutputPath())
                 .build();
         VCFHeader header = reader.getHeader();
-        for(String column: settings.getColumns()){
+        Set<String> columns = new HashSet<>();
+        columns.addAll(Set.of(settings.getColumns()));
+        if(!columns.contains("EnsemblID")){
+            columns.add("EnsemblID");
+        }
+        for(String column: columns){
             header.addMetaDataLine(new VCFFormatHeaderLine(column,VCFHeaderLineCount.UNBOUNDED, VCFHeaderLineType.String, String.format("Annotation from %s column of %s", column, settings.getAnnotationFile().getName())));
         }
         vcfWriter.writeHeader(header);
@@ -30,6 +32,7 @@ public class SampleAnnotator {
         vcfWriter.close();
     }
 
+    //FIXME: should be per gene not per CSQ
     private static void annotateVariant(Settings settings, VCFReader reader, Map<String, Integer> vepMapping, Map<String, String> mapping, Map<String, Map<String, String>> annotations, VariantContextWriter vcfWriter) {
         for(VariantContext variantContext : reader) {
             VariantContextBuilder vcBuilder = new VariantContextBuilder(variantContext);
@@ -41,21 +44,26 @@ public class SampleAnnotator {
                 Integer allele_num = Integer.valueOf(csq.split("\\|")[vepMapping.get("ALLELE_NUM")]);
                 Map<String, String> gene_annotations = annotations.get(ensembl);
                 createAnnotationMap(settings, gene_annotations, variantAnnotations, allele_num);
-                List<Genotype> genotypes = new ArrayList<>();
-                for (Genotype genotype : variantContext.getGenotypes()) {
-                    annotateGenotype(variantContext, genotype, variantAnnotations, genotypes);
-                }
-                vcBuilder.genotypes(genotypes);
-                vcfWriter.add(vcBuilder.make());
             }
+            List<Genotype> genotypes = new ArrayList<>();
+            for (Genotype genotype : variantContext.getGenotypes()) {
+                annotateGenotype(variantContext, genotype, variantAnnotations, genotypes);
+            }
+            vcBuilder.genotypes(genotypes);
+            vcfWriter.add(vcBuilder.make());
         }
     }
 
     private static void createAnnotationMap(Settings settings, Map<String, String> gene_annotations, Map<Key, String> variantAnnotations, Integer allele_num) {
         if (gene_annotations != null) {
-            for (String column : settings.getColumns()) {
+            Set<String> columns = new HashSet<>();
+            columns.addAll(Set.of(settings.getColumns()));
+            if(!columns.contains("EnsemblID")){
+                columns.add("EnsemblID");
+            }
+            for (String column : columns) {
                 String value = variantAnnotations.containsKey(new Key(column, allele_num)) ?
-                        variantAnnotations.get(new Key(column, allele_num) + "," + gene_annotations.get(column)) :
+                        variantAnnotations.get(new Key(column, allele_num)) + "," + gene_annotations.get(column) :
                         gene_annotations.get(column);
                 variantAnnotations.put(new Key(column, allele_num), value);
             }
@@ -73,7 +81,15 @@ public class SampleAnnotator {
                 }
             }
             if (isAnnotate) {
-                builder.attribute(key.getKey(), variantAnnotations.get(key));
+                String value = variantAnnotations.get(key);
+                if(value != null) {
+                    if (genotype.getExtendedAttribute(key.getKey()) != null) {
+                        value = genotype.getExtendedAttribute(key.getKey()) + "," + value;
+                    } else {
+                        value = variantAnnotations.get(key);
+                    }
+                    builder.attribute(key.getKey(), value);
+                }
             }
             genotypes.add(builder.make());
         }
